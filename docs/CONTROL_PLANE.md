@@ -1,5 +1,7 @@
 # Control Plane
 
+> Historical reference: the fleet is retired and deployment workflows remain disabled.
+
 Goal: manage CLAWDINATOR host lifecycle (create/recreate/replace) from **CLAWDINATOR chat** (Telegram/Discord) using an out‑of‑band control API. CLAWDINATOR agents can edit IaC, but **deploys run OOB** with no AWS creds inside agents.
 
 ## Goals
@@ -45,6 +47,7 @@ Goal: manage CLAWDINATOR host lifecycle (create/recreate/replace) from **CLAWDIN
   - `clawdinator-control-aws-access-key-id.age`
   - `clawdinator-control-aws-secret-access-key.age`
 - Token is injected into instances via bootstrap and read from `/run/agenix/clawdinator-control-token`.
+- Direct Lambda invocations authenticate with `control_token` in the payload. HTTP requests must supply the same token in both the `x-clawdinator-token` header and the JSON payload; a payload token alone does not authorize an HTTP request.
 
 ## Control API Env (Lambda)
 - `CONTROL_API_TOKEN`
@@ -52,6 +55,16 @@ Goal: manage CLAWDINATOR host lifecycle (create/recreate/replace) from **CLAWDIN
 - `GITHUB_REPO` (default `openclaw/clawdinators`)
 - `GITHUB_WORKFLOW` (default `fleet-deploy.yml`)
 - `GITHUB_REF` (default `main`)
+
+Requests must contain an object payload with string `action` and `target` fields. Optional `caller` and `ami_override` values accept strings or `null`. Omitting either field or setting it to `null` preserves the original defaults: no caller and an empty AMI override. Other non-string optional values are rejected. Malformed payloads return HTTP 400; missing or incorrect authentication returns HTTP 401.
+
+Run the control API regression tests without credentials or network access:
+
+```bash
+node --test control/api/handler.test.js
+```
+
+For runtime integration proof, run `node control/api/test-runtime.js` with Docker and OpenSSL installed. This invokes the unmodified handler through the AWS Node.js 20 Lambda image's Runtime Interface Emulator. The container has no external network; a loopback HTTPS fixture records dispatch requests using synthetic credentials. Malformed/authentication/self-deploy requests must make zero dispatches, while valid direct, JSON, and base64 requests must send the exact workflow inputs. Docker downloads the runtime image if it is not cached. No AWS resources or real GitHub workflows are used.
 
 ## Desired State (Fleet Registry)
 `nix/instances.json` is the fleet map (single source of truth for infra + host configs).
@@ -120,6 +133,17 @@ Example:
 - Use latest AMI tagged `clawdinator=true`.
 - Optional override via workflow input `ami_override` for rollback.
 - Automatic retention keeps the newest few tagged AMIs plus any AMI still backing a live CLAWDINATOR instance.
+- Retention aborts before deleting images or snapshots if the live-instance lookup or image-list parsing fails; a failed lookup must not be treated as an empty fleet.
+
+Run the retention regression checks without AWS credentials or network access:
+
+```bash
+bash scripts/lint-shell.sh
+bash scripts/tests/prune-clawdinator-ami-history.sh
+python3 scripts/tests/prune-ec2-client.py
+```
+
+The client integration test requires the AWS CLI and uses a local EC2 endpoint with synthetic credentials and inventories; it never contacts AWS.
 
 ## Deploy Execution (Workflow)
 - Single workflow `fleet-deploy.yml`.

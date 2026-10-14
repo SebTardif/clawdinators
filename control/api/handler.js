@@ -48,17 +48,20 @@ async function dispatchWorkflow(inputs) {
     throw new Error(`workflow dispatch failed: ${res.status} ${body}`);
   }
 }
-
-
 exports.handler = async (event) => {
   if (!CONTROL_API_TOKEN) {
     return json(500, { ok: false, error: 'missing CONTROL_API_TOKEN' });
   }
 
-  const headers = event.headers || {};
-  const token = getAuthToken(headers);
-  if (!token || token !== CONTROL_API_TOKEN) {
+  if (!event || typeof event !== 'object') {
     return unauthorized();
+  }
+  const httpEvent = Boolean(event.headers || event.requestContext || typeof event.body === 'string');
+  if (httpEvent) {
+    const token = getAuthToken(event.headers || {});
+    if (!token || token !== CONTROL_API_TOKEN) {
+      return unauthorized();
+    }
   }
 
   let payload;
@@ -68,7 +71,7 @@ exports.handler = async (event) => {
       : event.body;
     try {
       payload = JSON.parse(body);
-    } catch (err) {
+    } catch {
       return badRequest('invalid json');
     }
   } else if (event && typeof event === 'object') {
@@ -77,10 +80,17 @@ exports.handler = async (event) => {
     return badRequest('missing payload');
   }
 
-  const action = (payload.action || '').toLowerCase();
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return badRequest('payload must be an object');
+  }
+  if (typeof payload.action !== 'string') {
+    return badRequest('action must be a string');
+  }
+
+  const action = payload.action.toLowerCase();
   const target = payload.target;
-  const caller = payload.caller;
-  const amiOverride = payload.ami_override || '';
+  const caller = payload.caller ?? '';
+  const amiOverride = payload.ami_override ?? '';
   const controlToken = payload.control_token || null;
 
   if (CONTROL_API_TOKEN && controlToken !== CONTROL_API_TOKEN) {
@@ -95,8 +105,14 @@ exports.handler = async (event) => {
     return badRequest('unsupported action');
   }
 
-  if (!target) {
+  if (typeof target !== 'string' || !target) {
     return badRequest('target required');
+  }
+  if (typeof caller !== 'string') {
+    return badRequest('caller must be a string');
+  }
+  if (typeof amiOverride !== 'string') {
+    return badRequest('ami_override must be a string');
   }
 
   if (caller && target === caller) {
